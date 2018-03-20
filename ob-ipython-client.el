@@ -86,53 +86,84 @@ Communication is based on JSON.
       (ob-ipython-client/mode))
     (switch-to-buffer buf)))
 
-(defun ob-ipython-client/previous-prompt ()
-  (save-excursion
-    (goto-char (point-max))
-    (comint-previous-prompt 1)
-    (when (not (ob-ipython-client/at-prompt (point)))
-      (comint-previous-prompt 1))
+
+(defun ob-ipython-client/search-forward-json ()
+  (when (search-forward "{" nil t 1)
+    (backward-char 1)
     (point)))
 
-(defun ob-ipython-client/maybe-last-prompt ()
-  (save-excursion
-    (goto-char (point-max))
-    (comint-previous-prompt -1)
-    (beginning-of-line)
-    (if (ob-ipython-client/at-prompt (point))
-        (point)
-      nil)))
+(defun ob-ipython-client/search-backward-json ()
+  (when (search-backward "}" nil t 1)
+    (forward-char 1)
+    (point)))
 
-(defun ob-ipython-client/at-prompt (point)
+(defun ob-ipython-client/prompt-p ()
+  (save-excursion
+    (let ((limit (- (point-max) 1024)))
+      (goto-char (point-max))
+      (looking-back comint-prompt-regexp limit))))
+
+(defun ob-ipython-client/point-before-complete-json ()
+  (let ((count (if (ob-ipython-client/prompt-p) 2 1)))
+    (save-excursion
+      (goto-char (point-max))
+      (re-search-backward comint-prompt-regexp nil t count)
+      (when (ob-ipython-client/search-forward-json)
+        (point)))))
+    
+(defun ob-ipython-client/point-after-complete-json ()
+  (let ((count (if (ob-ipython-client/prompt-p) 1 0)))
+    (save-excursion
+      (goto-char (point-max))
+      (when (> count 0)
+        (re-search-backward comint-prompt-regexp nil t count)
+        (when (ob-ipython-client/search-backward-json)
+          (point))))))
+
+(defun ob-ipython-client/maybe-json-string-at-point ()
+  (let* ((start (ob-ipython-client/point-before-complete-json))
+         (end   (ob-ipython-client/point-after-complete-json)))
+    (when (and start end (< start end))
+      (buffer-substring-no-properties start end))))
+
+(defun ob-ipython-client/before-prompt-p (point)
   (save-excursion
     (goto-char point)
-    (looking-at "[ \n]*lm@instance-2:~$ ")))
+    (re-search-forward "[^[:space:]]")
+    (looking-at comint-prompt-regexp)))
+
+(defun ob-ipython-client/after-prompt-p (point)
+  (save-excursion
+    (goto-char point)
+    (let ((limit (- point 100)))
+      (looking-back comint-prompt-regexp limit))))
 
 (defun ob-ipython-client/filter (string code name callback args)
-  (let* ((start (ob-ipython-client/previous-prompt))
-         (end   (ob-ipython-client/maybe-last-prompt))
+  (let* ((start (ob-ipython-client/point-before-complete-json))
+         (end   (ob-ipython-client/point-after-complete-json))
          (s     (and start end (buffer-substring-no-properties start end)))
          (pipe-broken "Broken pipe$")
          (keyword   "stdout\\|stderr\\|traceback"))
 
     (assert (equal (buffer-name) "*ipython-client:instance-2*"))
-    (assert start)
 
     (when (and
            start
            end
            (< start end)
            (stringp s)
-           (ob-ipython-client/at-prompt start)
-           (ob-ipython-client/at-prompt end))
+           (ob-ipython-client/after-prompt-p  start)
+           (ob-ipython-client/before-prompt-p end))
 
       (assert (not (string-match pipe-broken s)))
-      
-      (if (string-match keyword s)
-          (ob-ipython-client/collect-json start end callback args)
-        (message "ob-ipython-client/filter: No output")))))
-        
+      (assert (string-match keyword s))
 
+      (ob-ipython-client/collect-json start end callback args)
+      ;;(condition-case nil
+      ;;(error (error "json parse error:%s" s)))
+
+      (message "ob-ipython-client/filter: finished execution"))))
+        
 (defun ob-ipython-client/collect-json (start end callback args)
   (save-excursion
     (assert end)
