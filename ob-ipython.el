@@ -509,7 +509,6 @@ a new kernel will be started."
 
 ;; babel framework
 
-
 (add-to-list 'org-src-lang-modes '("ipython" . python))
 (add-hook 'org-mode-hook 'ob-ipython-auto-configure-kernels)
 
@@ -737,9 +736,6 @@ Make sure your src block has a :session param.")
 (require 'ob-ipython-client)
 (defun ob-ipython--run-async (code name callback args)
   (ob-ipython--run-async-with-client code name callback args))
-
-
-
 
 (provide 'ob-ipython)
 
