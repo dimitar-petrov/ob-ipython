@@ -1,0 +1,9 @@
+
+* Split long lines of text
+
+#+BEGIN_SRC bash
+
+sed 's/.\{80\}/&\
+/g'
+
+#+END_SRC

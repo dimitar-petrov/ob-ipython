@@ -1,29 +1,51 @@
 
 (require 'js2-mode)
 
-(defvar ob-ipython-client/host nil)
-;; TODO will make it into a list
+;; TODO will make these into  lists
+(defvar ob-ipython-client/latest-host nil)
 (defvar ob-ipython-client/latest-proc)
-;; TODO will make it into a list
 (defvar ob-ipython-client/latest-proc-buf)
+
 (defvar ob-ipython-client/current-output)
 (defvar ob-ipython-client-program)
 
+
+;; Broken approach, fix it by including it in the closures
+(defvar ob-ipython-client/default-directory)
+
+(setq ob-ipython-client/startfile
+      (concat (or (-when-let (f load-file-name) (f-dirname f)) default-directory)
+              "startfile.sh"))
+
+(setq ob-ipython-resources-dir "/tmp/obipy-resources/")
+
 (setq ob-ipython-client-program "~/work/python/jcc-ai/scripts/client.py")
+
+(setq ob-ipython-client/send-format   "\
+# Suppress continuation prompt
+PS2= 
+# Work-around for strange piping bug
+read -r -d '' VAR <<EOF
+%s
+EOF
+
+# Feeding inputs directly via heredoc won't work for some reason
+echo \"$VAR\" | python ~/scripts/client.py  --conn-file `get_session_file` --execute | filter
+")
 
 (defun ob-ipython-client/input-sender (proc string)
   "Send STRING to PROC"
+  (when (not (process-live-p proc))
+    (ob-ipython-client ob-ipython/latest-host))
+
   (when (string-match "[[:alnum:]]" string)
     (comint-send-string 
      proc
-     (format 
-      "\
-PS2=
-python ~/work/python/jcc-ai/scripts/client.py  --conn-file `get_session_file` --execute  <<__IPYTHON_CLIENT_EOF__
-%s
-__IPYTHON_CLIENT_EOF__
-"
-     string))))
+     (format ob-ipython-client/send-format string))))
+
+(defun ob-ipython-client/input-test (string)
+  (interactive "sEnter string: ")
+  (ob-ipython-client/input-sender ob-ipython-client/latest-proc string))
 
 (defun ob-ipython-client/output-filter-test (&optional string)
   (let ((start (marker-position comint-last-input-end))
@@ -54,8 +76,10 @@ __IPYTHON_CLIENT_EOF__
 Communication is based on JSON.
 "
   :syntax-table js2-mode-syntax-table
+  ;; Disable font-lock for performance
+  (font-lock-mode -1)
   (setq comint-use-prompt-regexp t)
-  (setq comint-prompt-regexp "^lm@instance.*\\$ *")
+  (setq comint-prompt-regexp "^.*\\$ *")
   (setq comint-input-sender 'ob-ipython-client/input-sender)
   ;;(add-hook 'comint-output-filter-functions 'ob-ipython-client/output-filter-test nil t)
 
@@ -65,9 +89,6 @@ Communication is based on JSON.
       (insert "IPython Client Mode\n")
       (message (current-buffer)))))
 
-(setq ob-ipython-client/startfile
-      (concat (or (-when-let (f load-file-name) (f-dirname f)) default-directory)
-              "startfile.sh"))
 
 (defun ob-ipython-client (host)
   (interactive "sEnter a host name to ssh to: ")
@@ -77,11 +98,13 @@ Communication is based on JSON.
                "ssh"
                startfile
                host)))
+    (setq  ob-ipython-client/latest-host     host)
     (setq  ob-ipython-client/latest-proc-buf buf)
-    (setq  ob-ipython-client/latest-proc (get-buffer-process buf))
+    (setq  ob-ipython-client/latest-proc     (get-buffer-process buf))
     
     (with-current-buffer buf
       (make-variable-buffer-local 'ob-ipython-client/host)
+      (make-variable-buffer-local 'ob-ipython-client/default-directory)
       (setq ob-ipython-client/host host)
       (ob-ipython-client/mode))
     (switch-to-buffer buf)))
@@ -163,7 +186,13 @@ Communication is based on JSON.
       ;;(error (error "json parse error:%s" s)))
 
       (message "ob-ipython-client/filter: finished execution"))))
-        
+
+(defun ob-ipython-client/file-filter (string code name callback args)
+  (assert (ob-ipython-client/prompt-p))
+  (let ((file "/ssh:instance-2:/tmp/out.json"))
+    (with-current-buffer (find-file-noselect file)
+      (ob-ipython-client/collect-json (point-min) (point-max) callback args))))
+
 (defun ob-ipython-client/collect-json (start end callback args)
   (save-excursion
     (assert end)
@@ -182,7 +211,14 @@ Communication is based on JSON.
     (widen)
     (ob-ipython--maybe-run-async)))
 
-(defun ob-ipython--run-async-with-client (code name callback args)
+(defun ob-ipython-client/run-async (code name callback args)
+  (message "current-directory is: %s" default-directory)
+  (make-variable-buffer-local 'ob-ipython-client/default-directory)
+  (setq ob-ipython-client/default-directory default-directory)
+
+  (when (not (process-live-p ob-ipython-client/latest-proc))
+    (ob-ipython-client ob-ipython-client/latest-host))
+  
   (lexical-let*
       ((code code)
        (name name)
@@ -203,7 +239,58 @@ Communication is based on JSON.
       (comint-send-input))))
 
 
-(provide 'ob-ipython-client)
+(setq ob-ipython-client/default-directory "~/work/python/jcc-ai/jcc/ai")
+
+(defun ob-ipython-client/generate-file-name (suffix)
+  (let ((default-directory ob-ipython-client/default-directory))
+    (s-concat (make-temp-name ob-ipython-resources-dir) suffix)))
+
+;; I need a better data structure, maybe keyed by sentinels
+;; Maybe two, one for tracking json streams,
+;; one for tracking asynchronous state of the buffer
+
+(defun ob-ipython-client/enqueue (q x)
+  (message "ob-ipython-client/enqueue (len=%d, %s)"
+           (length (symbol-value q)) x)
+  (set q (append (symbol-value q) (list x))))
+
+(defun ob-ipython-client/dequeue (q)
+  (message "ob-ipython-client/dequeue (len=%d)"
+           (length (symbol-value q)))
+  (let ((ret (car (symbol-value q))))
+    (set q (cdr (symbol-value q)))
+    ret))
+
+(defun ob-ipython-client/queue-length (q)
+  (length (symbol-value q)))
+
+(defun ob-ipython-client/queue-reset (q)
+  (interactive)
+  (message "ob-ipython-client/queue-reset (len=%s)"
+           (ob-ipython-client/queue-length q))
+  (set q nil))
+
+
+;; Overrides
+;; TODO use saner mechanism (but not defadvice)
+
+(defun ob-ipython--run-async (code name callback args)
+  (ob-ipython-client/run-async code name callback args))
+
+(defun ob-ipython--generate-file-name (suffix)
+  (ob-ipython-client/generate-file-name suffix))
+
+(defun ob-ipython--enqueue (q x)
+  (ob-ipython-client/enqueue q x))
+
+(defun ob-ipython--dequeue (q)
+  (ob-ipython-client/dequeue q))
+
 
 (add-to-list 'load-path "~/work/ob-ipython")
+
+
+(provide 'ob-ipython-client)
+
+
 

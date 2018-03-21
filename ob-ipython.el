@@ -62,7 +62,7 @@
   "Command to launch ipython. Usually ipython or jupyter."
   :group 'ob-ipython)
 
-(defcustom ob-ipython-resources-dir "./obipy-resources/"
+(defcustom bob-ipython-resources-dir "./obipy-resources/"
   "Directory where resources (e.g images) are stored so that they
 can be displayed.")
 
@@ -596,6 +596,7 @@ This function is called by `org-babel-execute-src-block'."
          (session (cdr (assoc :session params)))
          (result-type (cdr (assoc :result-type params)))
          (sentinel (ipython--async-gen-sentinel)))
+    (message "sentinel is: %s" sentinel)
     (ob-ipython--create-kernel (ob-ipython--normalize-session session)
                                (cdr (assoc :kernel params)))
     (ob-ipython--execute-request-async
@@ -732,10 +733,7 @@ Make sure your src block has a :session param.")
 ;; lib
 
 ;; ipython client buffer
-
 (require 'ob-ipython-client)
-(defun ob-ipython--run-async (code name callback args)
-  (ob-ipython--run-async-with-client code name callback args))
 
 (provide 'ob-ipython)
 
