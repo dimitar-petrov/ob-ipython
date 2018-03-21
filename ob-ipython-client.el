@@ -146,12 +146,7 @@ Communication is based on JSON.
       (looking-back comint-prompt-regexp limit))))
 
 (defun ob-ipython-client/point-before-complete-json ()
-  (let ((count (if (ob-ipython-client/prompt-p) 2 1)))
-    (save-excursion
-      (goto-char (point-max))
-      (re-search-backward comint-prompt-regexp nil t count)
-      (when (ob-ipython-client/search-forward-json)
-        (point)))))
+  (ob-ipython-client/start-point))
     
 (defun ob-ipython-client/point-after-complete-json ()
   (let ((count (if (ob-ipython-client/prompt-p) 1 0)))
@@ -178,50 +173,89 @@ Communication is based on JSON.
   (save-excursion
     (goto-char point)
     (let ((limit (- point 100)))
-      (looking-back comint-prompt-regexp limit))))
+      (looking-back (ob-ipython-client/remove-bol comint-prompt-regexp) limit))))
+
+(defun ob-ipython-client/remove-bol (regexp)
+  (s-chop-prefix "^" regexp))
 
 (defun ob-ipython-client/filter (string code name callback args)
-  (if (and (not (s-blank? string))
+  (assert ob-ipython-client/point)
+  
+  (let* ((start (ob-ipython-client/start-point))
+         (end   (min (point-max) (+ start 1000)))
+         (head  (buffer-substring-no-properties start end)))
+  
+  (if (and (ob-ipython-client/contains-json? head)
            (ob-ipython-client/prompt-p))
       (ob-ipython-client/final-filter string code name callback args)
-    (ob-ipython-client/intermediate-filter string code name callback args)))
+    (ob-ipython-client/intermediate-filter string code name callback args))))
+
+;; TBD
+(defun ob-ipython-client/contains-json? (string)
+  (string-match "{.*}" string))
 
 (defun ob-ipython-client/final-filter (string code name callback args)
   (let* ((start (ob-ipython-client/point-before-complete-json))
          (end   (ob-ipython-client/point-after-complete-json))
          (s     (and start end (buffer-substring-no-properties start end)))
          (pipe-broken "Broken pipe$")
-         (keyword   "stdout\\|stderr\\|traceback"))
+         (keyword   "stdout\\|stderr\\|traceback\\|.image/png.:"))
 
-    (message "ob-ipython-client/final-filter: finising execution")
-    
+    (message "ob-ipython-client/final-filter: finishing execution")
+
     (assert (equal (buffer-name) "*ipython-client:instance-2*"))
+    (assert (string-match "execution_count" s))
+    
+    (if (and
+         start
+         end
+         (< start end)
+         (stringp s)
+         (ob-ipython-client/after-prompt-p  start)
+         (ob-ipython-client/before-prompt-p end))
+        (progn
+          (assert (string-match "execution_count" s))
+          (assert (string-match keyword s))
+          (assert (not (string-match pipe-broken s)))
 
-    (when (and
-           start
-           end
-           (< start end)
-           (stringp s)
-           (ob-ipython-client/after-prompt-p  start)
-           (ob-ipython-client/before-prompt-p end))
-
-      (assert (string-match keyword s))
-      (assert (not (string-match pipe-broken s)))
-
-      (if (string-match "image/png" s) 
-          (ob-ipython-client/collect-json-file callback args)
-        (ob-ipython-client/collect-json-region start end callback args))
+          (if (string-match "image/png" s) 
+              (ob-ipython-client/collect-json-file callback args)
+            (ob-ipython-client/collect-json-region start end callback args))
       
-      (message "ob-ipython-client/final-filter: finished execution"))))
+          (message "ob-ipython-client/final-filter: finished execution"))
+      (ob-ipython-client/final-filter-failed start end string code name callback args))))
+
+(defun ob-ipython-client/final-filter-failed (start end string code name callback args)
+  (let* ((s     (and start end (buffer-substring-no-properties start end)))
+         (pipe-broken "Broken pipe$")
+         (keyword   "stdout\\|stderr\\|traceback"))
+    (message
+     "ob-ipython-client/final-filter: could not finish the filter:%s ... %s"
+     (s-left  100 s)
+     (s-right 100 s))))
 
 (defun ob-ipython-client/intermediate-filter (string code name callback args)
-  (message "ob-ipython-client/intermediate-filter: %s" string))
+  (message "ob-ipython-client/intermediate-filter: %d %s...%s"
+           (length string)
+           (s-left  20 string)
+           (s-right 20 string)))
 
 (defun ob-ipython-client/collect-json-file (callback args)
   (let* ((sentinel (car args))
-         (file (format "/ssh:instance-2:/tmp/obipy-%s.jsonlines" sentinel)))
-    (with-current-buffer (find-file-noselect file)
-      (ob-ipython-client/collect-json (point-min) (point-max) callback args))))
+         ;; Inhibit tramp remote cache expiration
+         (remote-file-name-inhibit-cache nil)
+         ;; From tramp manual: disable VC for speed up
+         (vc-ignore-dir-regexp
+          (format "\\(%s\\)\\|\\(%s\\)"
+                  vc-ignore-dir-regexp
+                  tramp-file-name-regexp))
+         (file (format "/tmp/obipy-%s.jsonlines" sentinel))
+         (scp  (format "scp instance-2:%s %s" file file)))
+
+    (shell-command scp "*ob-ipython-client/scp*")
+    (with-temp-buffer
+      (insert-file-contents file)
+      (ob-ipython-client/collect-json-region (point-min) (point-max) callback args))))
 
 (defun ob-ipython-client/collect-json-region (start end callback args)
   (save-excursion
@@ -235,11 +269,23 @@ Communication is based on JSON.
     (setq start (point))
               
     (narrow-to-region start end)
+    (goto-char (point-min))
     (apply callback (-> (ob-ipython--collect-json)
                         ob-ipython--eval
                         (cons args)))
     (widen)
     (ob-ipython--maybe-run-async)))
+
+(defun ob-ipython-client/goto-point ()
+  (interactive)
+  (goto-char ob-ipython-client/point)
+  (re-search-forward comint-prompt-regexp))
+
+(defun ob-ipython-client/start-point ()
+  (save-excursion
+    (ob-ipython-client/goto-point)
+    (point)))
+
 
 (defun ob-ipython-client/run-async (code name callback args)
   (message "current-directory is: %s" default-directory)
@@ -266,15 +312,28 @@ Communication is based on JSON.
       (setq comint-output-filter-functions nil)
       (add-hook 'comint-output-filter-functions filter nil t)
       (goto-char (point-max))
-      (ob-ipython-client/send-input code name sentinel))))
+      (make-variable-buffer-local 'ob-ipython-client/point)
+      (setq ob-ipython-client/point (point))
+      ;; Temporary hack to reduce the probability of synchronization error
+      ;; Should be fixed with proper synchronization
+      (run-with-idle-timer 0.1 nil
+                           'ob-ipython-client/send-input
+                           buf proc code name sentinel))))
 
-(defun ob-ipython-client/send-input (code name sentinel)
-  (lexical-let ((sentinel sentinel))
-    (let ((comint-input-sender
-           (lambda (proc string)
-             (ob-ipython-client/input-sender proc string sentinel))))
-      (insert code "\n")
-      (comint-send-input))))
+(defun ob-ipython-client/send-input (buf proc code name sentinel)
+  (with-current-buffer buf
+    (lexical-let ((sentinel sentinel))
+      (let ((comint-input-sender
+             (lambda (proc string)
+               (ob-ipython-client/input-sender proc string sentinel)))
+            (host ob-ipython-client/latest-host)
+            (proc (if (process-live-p proc)
+                      proc
+                    (ob-ipython-client host))))
+
+        (goto-char (point-max))
+        (insert code "\n")
+        (comint-send-input)))))
 
 (setq ob-ipython-client/default-directory "~/work/python/jcc-ai/jcc/ai")
 
@@ -301,12 +360,23 @@ Communication is based on JSON.
 (defun ob-ipython-client/queue-length (q)
   (length (symbol-value q)))
 
-(defun ob-ipython-client/queue-reset (q)
+(defun ob-ipython-client/reset-queue ()
   (interactive)
-  (message "ob-ipython-client/queue-reset (len=%s)"
-           (ob-ipython-client/queue-length q))
-  (set q nil))
+  (message
+   "ob-ipython-client/queue-reset (len=%s)"
+   (ob-ipython-client/queue-length 'ob-ipython--async-queue))
+  (set 'ob-ipython--async-queue nil))
 
+(defun ob-ipython-client/inspect-queue ()
+  (interactive)
+  (let ((buf (get-buffer-create "*debug:obipy-client*")))
+    (with-current-buffer buf
+      (erase-buffer)
+      (loop for (code buf callback (sentinel buf rest))
+            in ob-ipython--async-queue
+            do (insert (format "%s\n" sentinel))))
+    (switch-to-buffer  buf)))
+          
 
 ;; Overrides
 ;; TODO use saner mechanism (but not defadvice)
