@@ -5,7 +5,6 @@
 (defvar ob-ipython-client/latest-host nil)
 (defvar ob-ipython-client/latest-proc)
 (defvar ob-ipython-client/latest-proc-buf)
-
 (defvar ob-ipython-client/current-output)
 (defvar ob-ipython-client-program)
 
@@ -24,24 +23,32 @@
 (setq ob-ipython-client/send-format   "\
 # Suppress continuation prompt
 PS2= 
+# The json output file for downloading images
+OUTFILE='%s'
 # Work-around for strange piping bug
 read -r -d '' VAR <<EOF
 %s
 EOF
-
 # Feeding inputs directly via heredoc won't work for some reason
-echo \"$VAR\" | python ~/scripts/client.py  --conn-file `get_session_file` --execute | filter
+echo \"$VAR\" | python ~/scripts/client.py  --conn-file `get_session_file` --execute | filter \"$OUTFILE\"
 ")
 
-(defun ob-ipython-client/input-sender (proc string)
+(defun ob-ipython-client/input-sender (proc string &optional sentinel)
   "Send STRING to PROC"
-  (when (not (process-live-p proc))
-    (ob-ipython-client ob-ipython/latest-host))
+  (let* ((proc
+          (if (process-live-p proc)
+              proc
+            (ob-ipython-client ob-ipython/latest-host)))
+         (remote-out-file
+          (if sentinel
+              (format "/tmp/obipy-%s.jsonlines" sentinel)
+            "/tmp/out.jsonlines")))
+    (setq ob-ipython-client/latest-proc proc)
 
-  (when (string-match "[[:alnum:]]" string)
-    (comint-send-string 
-     proc
-     (format ob-ipython-client/send-format string))))
+    (when (string-match "[[:alnum:]]" string)
+      (comint-send-string 
+       proc
+       (format ob-ipython-client/send-format remote-out-file string)))))
 
 (defun ob-ipython-client/input-test (string)
   (interactive "sEnter string: ")
@@ -90,7 +97,19 @@ Communication is based on JSON.
       (message (current-buffer)))))
 
 
+(defun ob-ipython-client/kill ()
+  "TODO: kill all the relevant communication buffers and processes"
+  (interactive)
+  (kill-buffer ob-ipython-client/latest-proc-buf))
+
+(defun ob-ipython-client/reset (&optional host)
+  (interactive)
+  (ob-ipython-client/kill)
+  (ob-ipython-client (or host ob-ipython-client/latest-host)))
+
+
 (defun ob-ipython-client (host)
+  "The interactive command to create the ssh communication channel to the ipython kernel"
   (interactive "sEnter a host name to ssh to: ")
   (let* ((startfile ob-ipython-client/startfile)
          (buf (make-comint
@@ -162,12 +181,20 @@ Communication is based on JSON.
       (looking-back comint-prompt-regexp limit))))
 
 (defun ob-ipython-client/filter (string code name callback args)
+  (if (and (not (s-blank? string))
+           (ob-ipython-client/prompt-p))
+      (ob-ipython-client/final-filter string code name callback args)
+    (ob-ipython-client/intermediate-filter string code name callback args)))
+
+(defun ob-ipython-client/final-filter (string code name callback args)
   (let* ((start (ob-ipython-client/point-before-complete-json))
          (end   (ob-ipython-client/point-after-complete-json))
          (s     (and start end (buffer-substring-no-properties start end)))
          (pipe-broken "Broken pipe$")
          (keyword   "stdout\\|stderr\\|traceback"))
 
+    (message "ob-ipython-client/final-filter: finising execution")
+    
     (assert (equal (buffer-name) "*ipython-client:instance-2*"))
 
     (when (and
@@ -178,22 +205,25 @@ Communication is based on JSON.
            (ob-ipython-client/after-prompt-p  start)
            (ob-ipython-client/before-prompt-p end))
 
-      (assert (not (string-match pipe-broken s)))
       (assert (string-match keyword s))
+      (assert (not (string-match pipe-broken s)))
 
-      (ob-ipython-client/collect-json start end callback args)
-      ;;(condition-case nil
-      ;;(error (error "json parse error:%s" s)))
+      (if (string-match "image/png" s) 
+          (ob-ipython-client/collect-json-file callback args)
+        (ob-ipython-client/collect-json-region start end callback args))
+      
+      (message "ob-ipython-client/final-filter: finished execution"))))
 
-      (message "ob-ipython-client/filter: finished execution"))))
+(defun ob-ipython-client/intermediate-filter (string code name callback args)
+  (message "ob-ipython-client/intermediate-filter: %s" string))
 
-(defun ob-ipython-client/file-filter (string code name callback args)
-  (assert (ob-ipython-client/prompt-p))
-  (let ((file "/ssh:instance-2:/tmp/out.json"))
+(defun ob-ipython-client/collect-json-file (callback args)
+  (let* ((sentinel (car args))
+         (file (format "/ssh:instance-2:/tmp/obipy-%s.jsonlines" sentinel)))
     (with-current-buffer (find-file-noselect file)
       (ob-ipython-client/collect-json (point-min) (point-max) callback args))))
 
-(defun ob-ipython-client/collect-json (start end callback args)
+(defun ob-ipython-client/collect-json-region (start end callback args)
   (save-excursion
     (assert end)
     (assert (< start end))
@@ -226,6 +256,7 @@ Communication is based on JSON.
        (args args)
        (proc     ob-ipython-client/latest-proc)
        (buf      ob-ipython-client/latest-proc-buf)
+       (sentinel (car args))
        (filter  (lambda (string)
                   (ob-ipython-client/filter string code name callback args))))
         
@@ -235,9 +266,15 @@ Communication is based on JSON.
       (setq comint-output-filter-functions nil)
       (add-hook 'comint-output-filter-functions filter nil t)
       (goto-char (point-max))
+      (ob-ipython-client/send-input code name sentinel))))
+
+(defun ob-ipython-client/send-input (code name sentinel)
+  (lexical-let ((sentinel sentinel))
+    (let ((comint-input-sender
+           (lambda (proc string)
+             (ob-ipython-client/input-sender proc string sentinel))))
       (insert code "\n")
       (comint-send-input))))
-
 
 (setq ob-ipython-client/default-directory "~/work/python/jcc-ai/jcc/ai")
 

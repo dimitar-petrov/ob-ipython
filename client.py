@@ -4,19 +4,6 @@ import json
 import sys
 import argparse
 
-import signal
-
-# Python's print not even remotely thread-safe...
-from threading import Lock
-mylock = Lock()
-p = print
-
-def safe_print(*a, **b):
-    with mylock:
-        p(*a, **b)
-
-signal.signal(signal.SIGPIPE, signal.SIG_DFL)
-        
 find_connection_file = client.find_connection_file
 
 semaphore = threading.Semaphore(value=0)
@@ -31,7 +18,7 @@ def msg_router(io, shell):
         with interested_lock:
             if msgid not in interested:
                 continue
-        safe_print(json.dumps(msg, default=str))
+        print(json.dumps(msg, default=str))
         if (msg.get('msg_type', '') == 'status' and
             msg['content']['execution_state'] == 'idle'):
             break
@@ -43,7 +30,7 @@ def msg_router(io, shell):
         with interested_lock:
             if msgid not in interested:
                 continue
-        safe_print(json.dumps(msg, default=str))
+        print(json.dumps(msg, default=str))
         if msg.get('msg_type', '') in ['execute_reply',
                                        'inspect_reply',
                                        'complete_reply']:

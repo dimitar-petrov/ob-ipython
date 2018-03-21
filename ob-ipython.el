@@ -62,7 +62,7 @@
   "Command to launch ipython. Usually ipython or jupyter."
   :group 'ob-ipython)
 
-(defcustom bob-ipython-resources-dir "./obipy-resources/"
+(defcustom ob-ipython-resources-dir "./obipy-resources/"
   "Directory where resources (e.g images) are stored so that they
 can be displayed.")
 
