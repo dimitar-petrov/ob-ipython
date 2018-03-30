@@ -129,6 +129,7 @@ Communication is based on JSON.
     (with-current-buffer buf
       (make-variable-buffer-local 'ob-ipython-client/host)
       (make-variable-buffer-local 'ob-ipython-client/default-directory)
+      (make-variable-buffer-local 'ob-ipython-client/point)
       (setq ob-ipython-client/host host)
       (ob-ipython-client/mode))
     (switch-to-buffer buf)))

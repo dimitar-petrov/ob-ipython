@@ -1,0 +1,4 @@
+*.jsonlines
+*.json
+obipy-resources
+test.py
