@@ -19,9 +19,11 @@
 (setq ob-ipython-resources-dir "/tmp/obipy-resources/")
 
 ;; This is the upstream version
-(setq ob-ipython-client-program "~/work/python/ob-ipython/client.py")
+(setq ob-ipython-client-program "~/work/python/jcc-ai/ob-ipython/client.py")
 
 (setq ob-ipython-client/send-format   "\
+PROMPT_COMMAND=
+PS1='\\h $ '
 # Suppress continuation prompt
 PS2= 
 # The json output file for downloading images
@@ -55,6 +57,38 @@ echo \"$VAR\" | python %s  --conn-file `get_session_file` --execute | filter \"$
                string
                script)))))
 
+(defun ob-ipython-client/restart-kernel ()
+  (interactive)
+  (let* ((host ob-ipython-client/latest-host)
+         (ipython-regexp "^.*python +.*ipython.*kernel.*$")
+         (command (format "ssh %s ' 
+echo restarting ipython kernel at `hostname`..
+conda activate jcc-ai
+
+free -m
+
+# Be extra careful not to kill the parent processes including ssh!
+# Otherwise you will just kill ssh at this point and get 255 
+pkill -fx '^[^[:space:]]+/python.*ipython.*kernel.*$'
+
+# Lets run the ipython kernel
+cd ~/work/python/
+nohup ipython kernel > ipython.out 2> ipython.err < /dev/null & 
+
+echo PID=$!
+sleep 1
+ps auxww | grep \"ipython\"; 
+
+' "
+                          host
+                          ))
+         (output-buffer "*ob-ipython-client/restart-kernel*")
+         (error-buffer  output-buffer))
+    (message "restarting kernel at %s" host)
+    (shell-command command output-buffer error-buffer)))
+
+                 
+
 (defun ob-ipython-client/input-test (string)
   (interactive "sEnter string: ")
   (ob-ipython-client/input-sender ob-ipython-client/latest-proc string))
@@ -74,7 +108,7 @@ echo \"$VAR\" | python %s  --conn-file `get_session_file` --execute | filter \"$
 
 (defun ob-ipython-client/test (string)
   (interactive "sEnter Input String: ")
-  (ob-ipython-client "instance-2")
+  (ob-ipython-client ob-ipython-client/latest-host)
   (with-current-buffer ob-ipython-client/latest-proc-buf
     (let ((proc (get-buffer-process (current-buffer))))
       (goto-char (point-max))

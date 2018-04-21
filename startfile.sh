@@ -14,9 +14,10 @@ function break_lines()
 /g'
 }
 
+# Escape newlines for json.tool
 function escape_newlines()
 {
-    sed 's/\\n/\\\\n/g'
+    sed 's/\\/\\\\/g'
 }
 
 function pretty_json()
