@@ -25,7 +25,7 @@
 PROMPT_COMMAND=
 PS1='\\h $ '
 # Suppress continuation prompt
-PS2= 
+PS2=
 # The json output file for downloading images
 OUTFILE='%s'
 # Work-around for strange piping bug
@@ -50,7 +50,7 @@ echo \"$VAR\" | python %s  --conn-file `get_session_file` --execute | filter \"$
     (setq ob-ipython-client/latest-proc proc)
 
     (when (try-string-match "[[:alnum:]]" string)
-      (comint-send-string 
+      (comint-send-string
        proc
        (format ob-ipython-client/send-format
                remote-out-file
@@ -61,23 +61,23 @@ echo \"$VAR\" | python %s  --conn-file `get_session_file` --execute | filter \"$
   (interactive)
   (let* ((host ob-ipython-client/latest-host)
          (ipython-regexp "^.*python +.*ipython.*kernel.*$")
-         (command (format "ssh %s ' 
+         (command (format "ssh %s '
 echo restarting ipython kernel at `hostname`..
 conda activate jcc-ai
 
 free -m
 
 # Be extra careful not to kill the parent processes including ssh!
-# Otherwise you will just kill ssh at this point and get 255 
+# Otherwise you will just kill ssh at this point and get 255
 pkill -fx '^[^[:space:]]+/python.*ipython.*kernel.*$'
 
 # Lets run the ipython kernel
 cd ~/work/python/
-nohup ipython kernel > ipython.out 2> ipython.err < /dev/null & 
+nohup ipython kernel > ipython.out 2> ipython.err < /dev/null &
 
 echo PID=$!
 sleep 1
-ps auxww | grep \"ipython\"; 
+ps auxww | grep \"ipython\";
 
 ' "
                           host
@@ -87,7 +87,7 @@ ps auxww | grep \"ipython\";
     (message "restarting kernel at %s" host)
     (shell-command command output-buffer error-buffer)))
 
-                 
+
 
 (defun ob-ipython-client/input-test (string)
   (interactive "sEnter string: ")
@@ -96,7 +96,7 @@ ps auxww | grep \"ipython\";
 (defun ob-ipython-client/output-filter-test (&optional string)
   (let ((start (marker-position comint-last-input-end))
         (end   (and comint-last-prompt (cdr comint-last-prompt))))
-    
+
     (message "ob-ipython-client/output-filter-test (%s . %s)" start end)
 
     (when (and start end (< start end))
@@ -118,7 +118,7 @@ ps auxww | grep \"ipython\";
 
 (define-derived-mode
   ob-ipython-client/mode comint-mode "IPython-client"
-  "Connect to a IPython kernel via ssh. 
+  "Connect to a IPython kernel via ssh.
 Communication is based on JSON.
 "
   :syntax-table js2-mode-syntax-table
@@ -159,7 +159,7 @@ Communication is based on JSON.
     (setq  ob-ipython-client/latest-host     host)
     (setq  ob-ipython-client/latest-proc-buf buf)
     (setq  ob-ipython-client/latest-proc     (get-buffer-process buf))
-    
+
     (with-current-buffer buf
       (make-variable-buffer-local 'ob-ipython-client/host)
       (make-variable-buffer-local 'ob-ipython-client/default-directory)
@@ -187,7 +187,7 @@ Communication is based on JSON.
 
 (defun ob-ipython-client/point-before-complete-json ()
   (ob-ipython-client/start-point))
-    
+
 (defun ob-ipython-client/point-after-complete-json ()
   (let ((count (if (ob-ipython-client/prompt-p) 1 0)))
     (save-excursion
@@ -243,14 +243,14 @@ Communication is based on JSON.
          (s     (and start end (buffer-substring-no-properties start end)))
          (pipe-broken "Broken pipe$")
          (host   ob-ipython-client/latest-host)
-         ;; huristic validation of data 
+         ;; huristic validation of data
          (keyword   "stdout\\|stderr\\|traceback\\|.image/png.:\\|execution_count"))
 
     (message "ob-ipython-client/final-filter: finishing execution")
 
     (assert (equal (buffer-name) (format "*ipython-client:%s*" host)))
     ;;(assert (try-string-match "execution_count" s))
-    
+
     (if (and
          start
          end
@@ -263,10 +263,10 @@ Communication is based on JSON.
           (assert (try-string-match keyword s))
           (assert (not (try-string-match pipe-broken s)))
 
-          (if (try-string-match "image/png" s) 
+          (if (try-string-match "image/png" s)
               (ob-ipython-client/collect-json-file callback args)
             (ob-ipython-client/collect-json-region start end callback args))
-      
+
           (message "ob-ipython-client/final-filter: finished execution"))
       (ob-ipython-client/final-filter-failed start end string code name callback args))))
 
@@ -318,7 +318,7 @@ Communication is based on JSON.
     (backward-char 1)
     (assert (looking-at "{"))
     (setq start (point))
-              
+
     (narrow-to-region start end)
     (goto-char (point-min))
     (apply callback (-> (ob-ipython--collect-json)
@@ -347,7 +347,7 @@ Communication is based on JSON.
   (when (or (not ob-ipython-client/latest-proc)
             (not (process-live-p ob-ipython-client/latest-proc)))
     (ob-ipython-client/reset))
-  
+
   (lexical-let*
       ((code code)
        (name name)
@@ -358,7 +358,7 @@ Communication is based on JSON.
        (sentinel (car args))
        (filter  (lambda (string)
                   (ob-ipython-client/filter string code name callback args))))
-        
+
     (with-current-buffer buf
       ;; Remove all the filter functions in this buffer
       (make-variable-buffer-local 'comint-output-filter-functions)
@@ -429,7 +429,7 @@ Communication is based on JSON.
             in ob-ipython--async-queue
             do (insert (format "%s\n" sentinel))))
     (switch-to-buffer  buf)))
-          
+
 
 ;; Overrides
 ;; TODO use saner mechanism (but not defadvice)
@@ -451,6 +451,3 @@ Communication is based on JSON.
 
 
 (provide 'ob-ipython-client)
-
-
-
