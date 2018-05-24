@@ -2,6 +2,8 @@
 (setq ob-ipython-client/default-directory "~/work/python/jcc_ai/jcc/ai")
 
 (require 'js2-mode)
+(require 'f)
+(require 's)
 
 ;; TODO will make these into  lists
 (defvar ob-ipython-client/latest-host nil)
@@ -13,19 +15,30 @@
 ;; Broken approach, fix it by including it in the closures
 (defvar ob-ipython-client/default-directory)
 
+
+;;; Task: Ditch these things for proper environment management
+
 (setq ob-ipython-client/startfile
-      (concat (or (-when-let (f load-file-name) (f-dirname f)) default-directory)
+      (f-join (or (-when-let (f load-file-name) (f-dirname f)) default-directory)
               "/startfile.sh"))
 
-(setq ob-ipython-client/environment-path
-      (concat (or (-when-let (f load-file-name) (f-dirname f)) default-directory)
-              "/env"))
-
-(defun ob-ipython-client/get-remote-environment-path ()
-  (format "/tmp/obipy/env"))
-
-
 (setq ob-ipython-resources-dir "/tmp/obipy-resources/")
+
+;;; Better environment management
+
+(defun ob-ipython-client/get-remote-root-path ()
+  (format "/tmp/obipy/"))
+
+(defun ob-ipython-client/get-remote-env-path ( )
+  (f-join (ob-ipython-client/get-remote-root-path params)
+          "env"))
+
+(defun ob-ipython-client/get-remote-env-path ()
+  (f-join (ob-ipython-client/get-remote-root-path params) "env"))
+
+(defun ob-ipython-client/ssh-switches (host)
+
+
 
 ;; This is the upstream version
 (setq ob-ipython-client-program "~/work/python/jcc_ai/ob-ipython/client.py")
@@ -153,7 +166,7 @@ ps auxww | grep \"ipython\";
 ' "
                           host
                           ))
-         (output-buffer "*ob-ipython-client/restart-kernel*")
+         (output-buffer "*ob-ipython-client/kernel-status*")
          (error-buffer  output-buffer))
     (message "restarting kernel at %s" host)
     (shell-command command output-buffer error-buffer)))
@@ -221,17 +234,29 @@ Communication is based on JSON.
     (set-buffer-modified-p nil)
     (kill-this-buffer)))
 
-
-
+(defun ob-ipython-client/make-comint (host)
+  (-let* ((startfile ob-ipython-client/startfile)
+          (name (format "ipython-client:%s" host))
+          (env-name "LC_OBIPY_ROOT") ;; LC_* can be sent via ssh
+          (process-environment
+           (cons (format "%s=%s" env-name (ob-ipython-client/get-remote-root-path))
+                 process-environment))
+          (buf (apply 'make-comint
+                      name
+                      "ssh"
+                      startfile
+                      "-o" (format "SendEnv=%s" env-name)
+                      host))
+                     )))
+    buf))
+  
 (defun ob-ipython-client (host)
   "The interactive command to create the ssh communication channel to the ipython kernel"
   (interactive "sEnter a host name to ssh to: ")
   (let* ((startfile ob-ipython-client/startfile)
-         (buf (make-comint
-               (format "ipython-client:%s" host)
-               "ssh"
-               startfile
-               host)))
+         (name (format "ipython-client:%s" host))
+         (buf (ob-ipython-client/make-comint host)))
+
     (setq  ob-ipython-client/latest-host     host)
     (setq  ob-ipython-client/latest-proc-buf buf)
     (setq  ob-ipython-client/latest-proc     (get-buffer-process buf))
