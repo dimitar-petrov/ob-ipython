@@ -1,0 +1,15 @@
+#+PROPERTY: header-args :session t3400.local :async t :exports both :tangle yes :comments both
+
+* Tangle test
+
+#+BEGIN_SRC ipython :tangle yes :results output drawer
+
+  def test():
+     return 0
+
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+0 - a1a0d79b-01ac-4d14-9606-fb0c22597a6f
+:END:

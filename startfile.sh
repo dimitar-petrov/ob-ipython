@@ -1,5 +1,8 @@
-# On recent Ubuntu, this may be necessary to use unbuffer command
+# On recent Ubuntu, this may be necessary to use the unbuffer command
 export TCLLIBPATH=/usr/lib/tcltk/x86_64-linux-gnu
+
+conda activate jcc-ai-gpu
+
 PS2=
 
 function get_session_file()
@@ -41,4 +44,9 @@ function filter()
     OUT_FILE="$1"
     OUT_FILE=${OUTFILE:=/tmp/out.jsonlines}
     tee "$OUT_FILE" | escape_newlines | pretty_json | summarize_base64
+}
+
+function eval_test()
+{
+    echo "$@" | python ""  --conn-file `get_session_file` --execute | filter /tmp/eval_test.json
 }

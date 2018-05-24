@@ -18,6 +18,7 @@ def msg_router(io, shell):
         with interested_lock:
             if msgid not in interested:
                 continue
+                #pass
         print(json.dumps(msg, default=str))
         if (msg.get('msg_type', '') == 'status' and
             msg['content']['execution_state'] == 'idle'):
@@ -30,6 +31,7 @@ def msg_router(io, shell):
         with interested_lock:
             if msgid not in interested:
                 continue
+                # pass
         print(json.dumps(msg, default=str))
         if msg.get('msg_type', '') in ['execute_reply',
                                        'inspect_reply',

@@ -1,4 +1,6 @@
+*.elc
 *.jsonlines
 *.json
+*.ipython
 obipy-resources
 test.py
