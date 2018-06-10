@@ -15,12 +15,19 @@
 ;; Broken approach, fix it by including it in the closures
 (defvar ob-ipython-client/default-directory)
 
-
 ;;; Task: Ditch these things for proper environment management
 
+(setq ob-ipython-client/conda-env "jcc-ai-gpu")
+
+(setq ob-ipython-client/local-root-path
+      (or (-when-let (f load-file-name) (f-dirname f)) default-directory))
+
 (setq ob-ipython-client/startfile
-      (f-join (or (-when-let (f load-file-name) (f-dirname f)) default-directory)
-              "/startfile.sh"))
+      (f-join ob-ipython-client/local-root-path
+              "startfile.sh"))
+
+(defun ob-ipython-client/remote-root-path (host)
+  (format "%s:/tmp/obipy" host))
 
 (setq ob-ipython-resources-dir "/tmp/obipy-resources/")
 
@@ -36,12 +43,22 @@
 (defun ob-ipython-client/get-remote-env-path ()
   (f-join (ob-ipython-client/get-remote-root-path params) "env"))
 
-(defun ob-ipython-client/ssh-switches (host)
-
-
 
 ;; This is the upstream version
 (setq ob-ipython-client-program "~/work/python/jcc_ai/ob-ipython/client.py")
+
+;; Implementation
+
+(defun ob-ipython-client/trace (spec &rest args)
+  (-let* ((trace-buffer (get-buffer-create "*obipy-trace*"))
+          (string       (apply 'format spec args)))
+    (with-current-buffer trace-buffer
+      (goto-char (point-max))
+      (insert (format-time-string "%Y-%m-%d-%T:"))
+      (insert string "\n")
+      (goto-char (point-max))
+      trace-buffer)))
+
 
 (setq ob-ipython-client/send-format   "\
 PROMPT_COMMAND=
@@ -54,10 +71,8 @@ OUTFILE='%s'
 read -r -d '' VAR <<EOF
 %s
 EOF
-# The path of client.py
-SCRIPT=%s
 # Feeding inputs directly via heredoc won't work for some reason
-echo \"$VAR\" | python $SCRIPT  --conn-file `get_session_file` --execute | filter \"$OUTFILE\"
+echo \"$VAR\" | python $CLIENT  --conn-file `get_session_file` --execute | filter \"$OUTFILE\"
 ")
 
 (defun ob-ipython-client/mangle-input (string &optional sentinel)
@@ -68,8 +83,7 @@ echo \"$VAR\" | python $SCRIPT  --conn-file `get_session_file` --execute | filte
     
     (format ob-ipython-client/send-format
             remote-out-file
-            string
-            script)))
+            string)))
 
 ;; TODO:
 ;; send the complete command including the shell mangling
@@ -146,8 +160,12 @@ echo \"$VAR\" | python $SCRIPT  --conn-file `get_session_file` --execute | filte
          (command (format "ssh %s '
 LANG=en_US.utf-8
 
+# Limit the memory usage in this shell (in kilo bytes):
+ulimit -m $((2000 * 1000))
+#ulimit -v $((2000 * 1000))
+
 echo restarting ipython kernel at `hostname`..
-conda activate jcc-ai-gpu
+conda activate %s
 
 free -m
 
@@ -165,10 +183,11 @@ ps auxww | grep \"ipython\";
 
 ' "
                           host
+                          ob-ipython-client/conda-env
                           ))
-         (output-buffer "*ob-ipython-client/kernel-status*")
+         (output-buffer "*obipy*")
          (error-buffer  output-buffer))
-    (message "restarting kernel at %s" host)
+    (ob-ipython-client/trace  "restarting kernel at %s" host)
     (shell-command command output-buffer error-buffer)))
 
 (defun ob-ipython-client/input-test (string)
@@ -179,7 +198,7 @@ ps auxww | grep \"ipython\";
   (let ((start (marker-position comint-last-input-end))
         (end   (and comint-last-prompt (cdr comint-last-prompt))))
 
-    (message "ob-ipython-client/output-filter-test (%s . %s)" start end)
+    (ob-ipython-client/trace "ob-ipython-client/output-filter-test (%s . %s)" start end)
 
     (when (and start end (< start end))
       (let ((new-output-chunk (buffer-substring-no-properties start end)))
@@ -210,17 +229,16 @@ Communication is based on JSON.
   :syntax-table js2-mode-syntax-table
   ;; Disable font-lock for performance
   (font-lock-mode -1)
-  (setq comint-use-prompt-regexp t)
-  (setq comint-prompt-regexp "^.\\{1,80\\}\\$ *")
-  (setq comint-input-sender 'ob-ipython-client/simple-input-sender)
-  ;;(add-hook 'comint-output-filter-functions 'ob-ipython-client/output-filter-test nil t)
-
+  (setq-local comint-use-prompt-regexp t)
+  (setq-local comint-prompt-regexp "^.\\{1,80\\}\\$ *")
+  (setq-local comint-input-sender 'ob-ipython-client/simple-input-sender)
+  (setq-local comint-scroll-to-bottom-on-output 'all)
+        
   (unless (comint-check-proc (current-buffer))
     (let ((proc (get-buffer-process (current-buffer))))
       (set-process-query-on-exit-flag proc nil)
       (insert "IPython Client Mode\n")
-      (message (current-buffer)))))
-
+      (ob-ipython-client/trace "%s" (current-buffer)))))
 
 (defun ob-ipython-client/jump-to-buffer ()
   (interactive)
@@ -236,32 +254,43 @@ Communication is based on JSON.
 
 (defun ob-ipython-client/make-comint (host)
   (-let* ((startfile ob-ipython-client/startfile)
-          (name (format "ipython-client:%s" host))
+          (name (format "obipy:%s" host))
           (env-name "LC_OBIPY_ROOT") ;; LC_* can be sent via ssh
           (process-environment
            (cons (format "%s=%s" env-name (ob-ipython-client/get-remote-root-path))
                  process-environment))
-          (buf (apply 'make-comint
-                      name
-                      "ssh"
-                      startfile
-                      "-o" (format "SendEnv=%s" env-name)
-                      host))
-                     )))
+          (buf (make-comint
+                name
+                "ssh"
+                startfile
+                "-o" (format "SendEnv=%s" env-name)
+                host))
+          )
     buf))
-  
+
+(defun ob-ipython-client/install-env (host)
+  (-let* ((local-env-path   (f-join ob-ipython-client/local-root-path "env"))
+          (remote-root-path (f-join (ob-ipython-client/remote-root-path host)))
+          (output-buf "*obipy*")
+          (command (format "rsync -avz %s %s" local-env-path remote-root-path)))
+    
+    (shell-command command output-buf)))
+
+;;(assert (ob-ipython-client/install-env "t"))
+
 (defun ob-ipython-client (host)
   "The interactive command to create the ssh communication channel to the ipython kernel"
   (interactive "sEnter a host name to ssh to: ")
-  (let* ((startfile ob-ipython-client/startfile)
-         (name (format "ipython-client:%s" host))
-         (buf (ob-ipython-client/make-comint host)))
+  (ob-ipython-client/install-env host)
+  
+  (let* ((buf (ob-ipython-client/make-comint host)))
 
     (setq  ob-ipython-client/latest-host     host)
     (setq  ob-ipython-client/latest-proc-buf buf)
     (setq  ob-ipython-client/latest-proc     (get-buffer-process buf))
 
     (with-current-buffer buf
+      (setq comint-output-filter-functions nil) ;; always buffer local
       (make-variable-buffer-local 'ob-ipython-client/host)
       (make-variable-buffer-local 'ob-ipython-client/default-directory)
       (make-variable-buffer-local 'ob-ipython-client/point)
@@ -319,6 +348,7 @@ Communication is based on JSON.
 (defun ob-ipython-client/remove-bol (regexp)
   (s-chop-prefix "^" regexp))
 
+
 (defun ob-ipython-client/filter (string code name callback args)
   (assert ob-ipython-client/point)
   (let* ((start (ob-ipython-client/start-point))
@@ -328,7 +358,7 @@ Communication is based on JSON.
          (buf      (nth 1 args))
          (file     (nth 2 args))
          (result-type (nth 3 args)))
-    
+    (ob-ipython-client/trace "obipy-filter")
     (setq ob-ipython-client/filter-start start)
     (setq ob-ipython-client/filter-end   end)
     
@@ -336,6 +366,20 @@ Communication is based on JSON.
            (ob-ipython-client/prompt-p))
       (ob-ipython-client/final-filter string code name callback args)
     (ob-ipython-client/intermediate-filter string code name callback args))))
+
+(defun ob-ipython-client/filter-test (string &rest args) 
+  (let ((start (marker-position comint-last-input-end))
+        (end  (and comint-last-prompt (cdr comint-last-prompt))))
+    (when (and start end (< start end))
+      (let* ((new-output-chunk (buffer-substring-no-properties start end))
+             (len (length new-output-chunk))
+             (ls  (s-lines new-output-chunk)))
+        t
+        ;; Some package is causing minibuffer 
+        ;;;(message "obipy-filter len=%s:\nbeg=%s\nend=%s" len (car ls) (last ls))))))
+        ))))
+
+
 
 (defun try-string-match (regexp string)
   (condition-case nil
@@ -353,17 +397,21 @@ Communication is based on JSON.
          (pipe-broken "Broken pipe$")
          (host   ob-ipython-client/latest-host)
          ;; huristic validation of data
-         (keyword   "stdout\\|stderr\\|traceback\\|.image/png.:\\|execution_count")
+         (keyword   "stdout\\|stderr\\|traceback\\|code\\|.image/png.:\\|execution_count")
          (sentinel (nth 0 args))
          (buf      (nth 1 args))
          (file     (nth 2 args))
          (result-type (nth 3 args)))
 
-    (message "ob-ipython-client/final-filter: finishing execution:" )
+    (ob-ipython-client/trace "%s" string)
+    (ob-ipython-client/trace "ob-ipython-client/final-filter: finishing execution:" )
 
-    (assert (equal (buffer-name) (format "*ipython-client:%s*" host)))
+    (assert (equal (buffer-name) (format "*obipy:%s*" host)))
     ;;(assert (try-string-match "execution_count" s))
 
+    (ob-ipython-client/trace  "ob-ipython-client/final-filter: running hooks")
+    (run-hooks 'ob-ipython-client/async-finish-hook)
+    
     (if (and
          start
          end
@@ -380,14 +428,23 @@ Communication is based on JSON.
               (ob-ipython-client/collect-json-file callback args)
             (ob-ipython-client/collect-json-region start end callback args))
 
-          (message "ob-ipython-client/final-filter: finished execution %s" sentinel ))
-      (ob-ipython-client/final-filter-failed start end string code name callback args))))
+          (ob-ipython-client/trace  "ob-ipython-client/final-filter: finished execution %s" sentinel ))
+      (ob-ipython-client/final-filter-failed start end string code name callback args))
+    
+    ))
+
+(add-hook 'ob-ipython-client/async-finish-hook 'my-say-done t)
+(defun my-say-done ()
+  (interactive)
+  (shell-command "say done"))
+
+
 
 (defun ob-ipython-client/final-filter-failed (start end string code name callback args)
   (let* ((s     (and start end (buffer-substring-no-properties start end)))
          (pipe-broken "Broken pipe$")
          (keyword   "stdout\\|stderr\\|traceback"))
-    (message
+    (ob-ipython-client/trace 
      "ob-ipython-client/final-filter: could not finish the filter:%s ... %s"
      (s-chomp (s-left  100 s))
      (s-chomp (s-right 100 s)))))
@@ -397,8 +454,8 @@ Communication is based on JSON.
          (ms (-filter (lambda (s) (not (s-blank? s))) ls))
          (l0 (car  ms))
          (l1 (last ms)))
-    (message "ob-ipython-client/intermediate-filter: %d %s...%s"
-             (length string) (s-left 20 l0) (s-left 20 l1))))
+    
+    (ob-ipython-client/trace "%s" string)))
 
 (assert (ob-ipython-client/intermediate-filter "" nil nil nil nil))
 
@@ -419,7 +476,7 @@ Communication is based on JSON.
 
     (cl-flet ((call-scp () (eq 0 (call-process "scp" nil nil nil src dst))))
       (while (not (call-scp))
-        (message "trying scp %s %s" src dst)))
+        (ob-ipython-client/trace "trying scp %s %s" src dst)))
 
     (with-temp-buffer
       (insert-file-contents file)
@@ -457,32 +514,28 @@ Communication is based on JSON.
     (ob-ipython-client/search-forward-json)
     (point)))
 
-
 (defun ob-ipython-client/run-async (code name callback args)
-  (message "current-directory is: %s" default-directory)
+  (ob-ipython-client/trace "current-directory is: %s" default-directory)
   (make-variable-buffer-local 'ob-ipython-client/default-directory)
   (setq ob-ipython-client/default-directory default-directory)
 
   (when (or (not ob-ipython-client/latest-proc)
             (not (process-live-p ob-ipython-client/latest-proc)))
-    (ob-ipython-client/reset))
+    (ob-ipython-client ob-ipython-client/latest-host))
 
-  (lexical-let*
-      ((code code)
-       (name name)
-       (callback callback)
-       (args args)
-       (proc     ob-ipython-client/latest-proc)
+  (setq ob-ipython-client/filter-args (list code name callback args))
+  
+  (-let*
+      ((proc     ob-ipython-client/latest-proc)
        (buf      ob-ipython-client/latest-proc-buf)
        (sentinel (car args))
-       (filter  (lambda (string)
-                  (ob-ipython-client/filter string code name callback args))))
+       (filter   (lambda (string) (apply 'ob-ipython-client/filter string ob-ipython-client/filter-args))))
 
     (with-current-buffer buf
       ;; Remove all the filter functions in this buffer
-      (make-variable-buffer-local 'comint-output-filter-functions)
       (setq comint-output-filter-functions nil)
-      (add-hook 'comint-output-filter-functions filter nil t)
+      (add-hook 'comint-output-filter-functions filter  nil t)
+      (setq comint-preoutput-filter-functions nil)
       (goto-char (point-max))
       (make-variable-buffer-local 'ob-ipython-client/point)
       (setq ob-ipython-client/point (point))
@@ -513,12 +566,12 @@ Communication is based on JSON.
 ;; one for tracking asynchronous state of the buffer
 
 (defun ob-ipython-client/enqueue (q x)
-  (message "ob-ipython-client/enqueue (len=%d, %s)"
+  (ob-ipython-client/trace  "ob-ipython-client/enqueue (len=%d, %s)"
            (length (symbol-value q)) x)
   (set q (append (symbol-value q) (list x))))
 
 (defun ob-ipython-client/dequeue (q)
-  (message "ob-ipython-client/dequeue (len=%d)"
+  (ob-ipython-client/trace  "ob-ipython-client/dequeue (len=%d)"
            (length (symbol-value q)))
   (let ((ret (car (symbol-value q))))
     (set q (cdr (symbol-value q)))
@@ -529,7 +582,7 @@ Communication is based on JSON.
 
 (defun ob-ipython-client/reset-queue ()
   (interactive)
-  (message
+  (ob-ipython-client/trace
    "ob-ipython-client/queue-reset (len=%s)"
    (ob-ipython-client/queue-length 'ob-ipython--async-queue))
   (set 'ob-ipython--async-queue nil))

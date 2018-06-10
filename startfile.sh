@@ -1,7 +1,31 @@
 # On recent Ubuntu, this may be necessary to use the unbuffer command
 export TCLLIBPATH=/usr/lib/tcltk/x86_64-linux-gnu
 
-conda activate jcc-ai-gpu
+if [ -d "$LC_OBIPY_ROOT" ];
+then
+    echo env dir is $LC_OBIPY_ROOT
+else
+    echo env dir not defined
+    exit 1
+fi
+
+CLIENT=$LC_OBIPY_ROOT/env/bin/client.py
+if [ -f $CLIENT ] ;
+then
+    echo client script is $CLIENT
+else
+    echo "$CLIENT does not exist "
+    exit 1
+fi
+
+if conda activate jcc-ai-gpu || conda activate jcc-ai-nogpus;
+then
+    conda info --env
+else
+    echo "conda not available"
+    exit 1
+fi
+
 
 PS2=
 
@@ -46,7 +70,7 @@ function filter()
     tee "$OUT_FILE" | escape_newlines | pretty_json | summarize_base64
 }
 
-function eval_test()
+function ipy_eval()
 {
-    echo "$@" | python ""  --conn-file `get_session_file` --execute | filter /tmp/eval_test.json
+    echo "$@" | python $CLIENT  --conn-file `get_session_file` --execute | filter /tmp/eval_test.json
 }
